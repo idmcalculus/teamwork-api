@@ -28,26 +28,26 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/user', [AuthController::class, 'user']);
     
     // User routes
-    Route::get('/users', [UserController::class, 'index']);
-    Route::get('/users/{id}', [UserController::class, 'show']);
-    Route::put('/profile', [UserController::class, 'updateProfile']);
-    Route::post('/change-password', [UserController::class, 'changePassword']);
-    Route::put('/users/{id}/admin-status', [UserController::class, 'updateAdminStatus']);
+    Route::get('/users', [UserController::class, 'getAllUsers']);
+    Route::get('/users/{userId}', [UserController::class, 'getUserById']);
+    Route::put('/profile', [UserController::class, 'updateUserProfile']);
+    Route::post('/change-password', [UserController::class, 'changeUserPassword']);
+    Route::put('/users/{userId}/admin-status', [UserController::class, 'updateUserAdminStatus']);
     
     // Post routes
-    Route::get('/posts', [PostController::class, 'index']);
-    Route::post('/posts', [PostController::class, 'store']);
-    Route::get('/posts/{id}', [PostController::class, 'show']);
-    Route::put('/posts/{id}', [PostController::class, 'update']);
-    Route::delete('/posts/{id}', [PostController::class, 'destroy']);
-    Route::put('/posts/{id}/flag', [PostController::class, 'flagPost']);
-    Route::get('/users/{userId}/posts', [PostController::class, 'getUserPosts']);
+    Route::get('/posts', [PostController::class, 'getAllPosts']);
+    Route::post('/posts', [PostController::class, 'createNewPost']);
+    Route::get('/posts/{postId}', [PostController::class, 'getPostById']);
+    Route::put('/posts/{postId}', [PostController::class, 'updateExistingPost']);
+    Route::delete('/posts/{postId}', [PostController::class, 'deletePost']);
+    Route::put('/posts/{postId}/flag', [PostController::class, 'flagInappropriatePost']);
+    Route::get('/users/{userId}/posts', [PostController::class, 'getPostsByUserId']);
     
     // Comment routes
-    Route::get('/posts/{postId}/comments', [CommentController::class, 'index']);
-    Route::post('/posts/{postId}/comments', [CommentController::class, 'store']);
-    Route::get('/posts/{postId}/comments/{id}', [CommentController::class, 'show']);
-    Route::put('/posts/{postId}/comments/{id}', [CommentController::class, 'update']);
-    Route::delete('/posts/{postId}/comments/{id}', [CommentController::class, 'destroy']);
-    Route::get('/users/{userId}/comments', [CommentController::class, 'getUserComments']);
+    Route::get('/posts/{postId}/comments', [CommentController::class, 'getPostComments']);
+    Route::post('/posts/{postId}/comments', [CommentController::class, 'createNewComment']);
+    Route::get('/posts/{postId}/comments/{commentId}', [CommentController::class, 'getCommentById']);
+    Route::put('/posts/{postId}/comments/{commentId}', [CommentController::class, 'updateExistingComment']);
+    Route::delete('/posts/{postId}/comments/{commentId}', [CommentController::class, 'deleteComment']);
+    Route::get('/users/{userId}/comments', [CommentController::class, 'getCommentsByUserId']);
 });

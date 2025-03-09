@@ -2,9 +2,12 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Exceptions\ApiException;
 use App\Http\Controllers\Controller;
 use App\Models\Comment;
 use App\Models\Post;
+use Illuminate\Auth\Access\AuthorizationException;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 
@@ -16,15 +19,16 @@ class CommentController extends Controller
      * @param  string  $postId
      * @return \Illuminate\Http\JsonResponse
      */
-    public function index(string $postId)
+    public function getPostComments(string $postId): JsonResponse
     {
-        $post = Post::findOrFail($postId);
-        $comments = $post->comments()->with('user')->latest()->get();
+        try {
+            $targetPost = Post::findOrFail($postId);
+            $postCommentsList = $targetPost->comments()->with('user')->latest()->get();
 
-        return response()->json([
-            'status' => 'success',
-            'data' => $comments,
-        ]);
+            return $this->successResponse($postCommentsList);
+        } catch (\Exception $exception) {
+            return $this->errorResponse('Failed to retrieve comments: ' . $exception->getMessage(), 404);
+        }
     }
 
     /**
@@ -34,25 +38,29 @@ class CommentController extends Controller
      * @param  string  $postId
      * @return \Illuminate\Http\JsonResponse
      */
-    public function store(Request $request, string $postId)
+    public function createNewComment(Request $commentCreationRequest, string $postId): JsonResponse
     {
-        $post = Post::findOrFail($postId);
+        try {
+            $targetPost = Post::findOrFail($postId);
 
-        $request->validate([
-            'comment' => 'required|string',
-        ]);
+            $commentCreationRequest->validate([
+                'comment' => 'required|string',
+            ]);
 
-        $comment = new Comment();
-        $comment->comment = $request->comment;
-        $comment->user_id = Auth::id();
-        $comment->post_id = $post->id;
-        $comment->save();
+            $newCommentEntry = new Comment();
+            $newCommentEntry->comment = $commentCreationRequest->comment;
+            $newCommentEntry->user_id = Auth::id();
+            $newCommentEntry->post_id = $targetPost->id;
+            $newCommentEntry->save();
 
-        return response()->json([
-            'status' => 'success',
-            'message' => 'Comment added successfully',
-            'data' => $comment->load('user'),
-        ], 201);
+            return $this->successResponse(
+                $newCommentEntry->load('user'),
+                'Comment added successfully',
+                201
+            );
+        } catch (\Exception $exception) {
+            return $this->errorResponse('Failed to create comment: ' . $exception->getMessage(), 500);
+        }
     }
 
     /**
@@ -62,15 +70,16 @@ class CommentController extends Controller
      * @param  string  $id
      * @return \Illuminate\Http\JsonResponse
      */
-    public function show(string $postId, string $id)
+    public function getCommentById(string $postId, string $commentId): JsonResponse
     {
-        $post = Post::findOrFail($postId);
-        $comment = $post->comments()->with('user')->findOrFail($id);
+        try {
+            $targetPost = Post::findOrFail($postId);
+            $requestedComment = $targetPost->comments()->with('user')->findOrFail($commentId);
 
-        return response()->json([
-            'status' => 'success',
-            'data' => $comment,
-        ]);
+            return $this->successResponse($requestedComment);
+        } catch (\Exception $exception) {
+            return $this->errorResponse('Comment not found', 404);
+        }
     }
 
     /**
@@ -81,31 +90,33 @@ class CommentController extends Controller
      * @param  string  $id
      * @return \Illuminate\Http\JsonResponse
      */
-    public function update(Request $request, string $postId, string $id)
+    public function updateExistingComment(Request $commentUpdateRequest, string $postId, string $commentId): JsonResponse
     {
-        $post = Post::findOrFail($postId);
-        $comment = $post->comments()->findOrFail($id);
+        try {
+            $targetPost = Post::findOrFail($postId);
+            $existingComment = $targetPost->comments()->findOrFail($commentId);
 
-        // Check if the authenticated user is the owner of the comment
-        if ($comment->user_id !== Auth::id() && !Auth::user()->is_admin) {
-            return response()->json([
-                'status' => 'error',
-                'message' => 'Unauthorized. You can only update your own comments.',
-            ], 403);
+            // Check if the authenticated user is the owner of the comment
+            if ($existingComment->user_id !== Auth::id() && !Auth::user()->is_admin) {
+                throw new AuthorizationException('Unauthorized. You can only update your own comments.');
+            }
+
+            $commentUpdateRequest->validate([
+                'comment' => 'required|string',
+            ]);
+
+            $existingComment->comment = $commentUpdateRequest->comment;
+            $existingComment->save();
+
+            return $this->successResponse(
+                $existingComment->load('user'),
+                'Comment updated successfully'
+            );
+        } catch (AuthorizationException $exception) {
+            return $this->errorResponse($exception->getMessage(), 403);
+        } catch (\Exception $exception) {
+            return $this->errorResponse('Failed to update comment: ' . $exception->getMessage(), 500);
         }
-
-        $request->validate([
-            'comment' => 'required|string',
-        ]);
-
-        $comment->comment = $request->comment;
-        $comment->save();
-
-        return response()->json([
-            'status' => 'success',
-            'message' => 'Comment updated successfully',
-            'data' => $comment->load('user'),
-        ]);
     }
 
     /**
@@ -115,25 +126,25 @@ class CommentController extends Controller
      * @param  string  $id
      * @return \Illuminate\Http\JsonResponse
      */
-    public function destroy(string $postId, string $id)
+    public function deleteComment(string $postId, string $commentId): JsonResponse
     {
-        $post = Post::findOrFail($postId);
-        $comment = $post->comments()->findOrFail($id);
+        try {
+            $targetPost = Post::findOrFail($postId);
+            $commentToDelete = $targetPost->comments()->findOrFail($commentId);
 
-        // Check if the authenticated user is the owner of the comment or the post or an admin
-        if ($comment->user_id !== Auth::id() && $post->user_id !== Auth::id() && !Auth::user()->is_admin) {
-            return response()->json([
-                'status' => 'error',
-                'message' => 'Unauthorized. You can only delete your own comments or comments on your posts.',
-            ], 403);
+            // Check if the authenticated user is the owner of the comment or the post or an admin
+            if ($commentToDelete->user_id !== Auth::id() && $targetPost->user_id !== Auth::id() && !Auth::user()->is_admin) {
+                throw new AuthorizationException('Unauthorized. You can only delete your own comments or comments on your posts.');
+            }
+
+            $commentToDelete->delete();
+
+            return $this->successResponse(null, 'Comment deleted successfully');
+        } catch (AuthorizationException $exception) {
+            return $this->errorResponse($exception->getMessage(), 403);
+        } catch (\Exception $exception) {
+            return $this->errorResponse('Failed to delete comment: ' . $exception->getMessage(), 500);
         }
-
-        $comment->delete();
-
-        return response()->json([
-            'status' => 'success',
-            'message' => 'Comment deleted successfully',
-        ]);
     }
 
     /**
@@ -142,16 +153,17 @@ class CommentController extends Controller
      * @param  string  $userId
      * @return \Illuminate\Http\JsonResponse
      */
-    public function getUserComments(string $userId)
+    public function getCommentsByUserId(string $userId): JsonResponse
     {
-        $comments = Comment::with(['user', 'post'])
-            ->where('user_id', $userId)
-            ->latest()
-            ->get();
+        try {
+            $userSpecificComments = Comment::with(['user', 'post'])
+                ->where('user_id', $userId)
+                ->latest()
+                ->get();
 
-        return response()->json([
-            'status' => 'success',
-            'data' => $comments,
-        ]);
+            return $this->successResponse($userSpecificComments);
+        } catch (\Exception $exception) {
+            return $this->errorResponse('Failed to retrieve user comments: ' . $exception->getMessage(), 500);
+        }
     }
 }

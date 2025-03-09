@@ -2,12 +2,16 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Exceptions\ApiException;
 use App\Http\Controllers\Controller;
 use App\Models\User;
+use Illuminate\Auth\Access\AuthorizationException;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Validation\ValidationException;
 
 class UserController extends Controller
 {
@@ -16,14 +20,14 @@ class UserController extends Controller
      *
      * @return \Illuminate\Http\JsonResponse
      */
-    public function index()
+    public function getAllUsers(): JsonResponse
     {
-        $users = User::paginate(10);
-
-        return response()->json([
-            'status' => 'success',
-            'data' => $users,
-        ]);
+        try {
+            $paginatedUsersList = User::paginate(10);
+            return $this->paginatedResponse($paginatedUsersList);
+        } catch (\Exception $exception) {
+            return $this->errorResponse('Failed to retrieve users: ' . $exception->getMessage(), 500);
+        }
     }
 
     /**
@@ -32,14 +36,14 @@ class UserController extends Controller
      * @param  string  $id
      * @return \Illuminate\Http\JsonResponse
      */
-    public function show(string $id)
+    public function getUserById(string $userId): JsonResponse
     {
-        $user = User::findOrFail($id);
-
-        return response()->json([
-            'status' => 'success',
-            'data' => $user,
-        ]);
+        try {
+            $requestedUser = User::findOrFail($userId);
+            return $this->successResponse($requestedUser);
+        } catch (\Exception $exception) {
+            return $this->errorResponse('User not found', 404);
+        }
     }
 
     /**
@@ -48,70 +52,70 @@ class UserController extends Controller
      * @param  \Illuminate\Http\Request  $request
      * @return \Illuminate\Http\JsonResponse
      */
-    public function updateProfile(Request $request)
+    public function updateUserProfile(Request $profileUpdateRequest): JsonResponse
     {
-        /** @var \App\Models\User $user */
-        $user = Auth::user();
+        try {
+            /** @var \App\Models\User $authenticatedUser */
+            $authenticatedUser = Auth::user();
 
-        $request->validate([
-            'name' => 'sometimes|string|max:255',
-            'department' => 'sometimes|string|max:255',
-            'job_role' => 'sometimes|string|max:255',
-            'bio' => 'sometimes|string',
-            'address' => 'sometimes|string',
-            'gender' => 'sometimes|string|in:male,female,other',
-            'phone' => 'sometimes|string',
-            'avatar' => 'sometimes|image|mimes:jpeg,png,jpg,gif|max:2048',
-        ]);
+            $profileUpdateRequest->validate([
+                'name' => 'sometimes|string|max:255',
+                'department' => 'sometimes|string|max:255',
+                'job_role' => 'sometimes|string|max:255',
+                'bio' => 'sometimes|string',
+                'address' => 'sometimes|string',
+                'gender' => 'sometimes|string|in:male,female,other',
+                'phone' => 'sometimes|string',
+                'avatar' => 'sometimes|image|mimes:jpeg,png,jpg,gif|max:2048',
+            ]);
 
-        // Update user fields if they exist in the request
-        if ($request->has('name')) {
-            $user->name = $request->name;
-        }
-
-        if ($request->has('department')) {
-            $user->department = $request->department;
-        }
-
-        if ($request->has('job_role')) {
-            $user->job_role = $request->job_role;
-        }
-
-        if ($request->has('bio')) {
-            $user->bio = $request->bio;
-        }
-
-        if ($request->has('address')) {
-            $user->address = $request->address;
-        }
-
-        if ($request->has('gender')) {
-            $user->gender = $request->gender;
-        }
-
-        if ($request->has('phone')) {
-            $user->phone = $request->phone;
-        }
-
-        // Handle avatar upload
-        if ($request->hasFile('avatar')) {
-            // Delete old avatar if exists
-            if ($user->avatar) {
-                $oldPath = str_replace('/storage/', '', $user->avatar);
-                Storage::disk('public')->delete($oldPath);
+            // Update user fields if they exist in the request
+            if ($profileUpdateRequest->has('name')) {
+                $authenticatedUser->name = $profileUpdateRequest->name;
             }
 
-            $avatarPath = $request->file('avatar')->store('avatars', 'public');
-            $user->avatar = Storage::url($avatarPath);
+            if ($profileUpdateRequest->has('department')) {
+                $authenticatedUser->department = $profileUpdateRequest->department;
+            }
+
+            if ($profileUpdateRequest->has('job_role')) {
+                $authenticatedUser->job_role = $profileUpdateRequest->job_role;
+            }
+
+            if ($profileUpdateRequest->has('bio')) {
+                $authenticatedUser->bio = $profileUpdateRequest->bio;
+            }
+
+            if ($profileUpdateRequest->has('address')) {
+                $authenticatedUser->address = $profileUpdateRequest->address;
+            }
+
+            if ($profileUpdateRequest->has('gender')) {
+                $authenticatedUser->gender = $profileUpdateRequest->gender;
+            }
+
+            if ($profileUpdateRequest->has('phone')) {
+                $authenticatedUser->phone = $profileUpdateRequest->phone;
+            }
+
+            // Handle avatar upload
+            if ($profileUpdateRequest->hasFile('avatar')) {
+                // Delete old avatar if exists
+                if ($authenticatedUser->avatar) {
+                    $previousAvatarPath = str_replace('/storage/', '', $authenticatedUser->avatar);
+                    Storage::disk('public')->delete($previousAvatarPath);
+                }
+
+                $newAvatarPath = $profileUpdateRequest->file('avatar')->store('avatars', 'public');
+                $authenticatedUser->avatar = Storage::url($newAvatarPath);
+            }
+
+            $authenticatedUser->save();
+
+            return $this->successResponse($authenticatedUser, 'Profile updated successfully');
+        } catch (\Exception $exception) {
+            return $this->errorResponse('Failed to update profile: ' . $exception->getMessage(), 500);
         }
-
-        $user->save();
-
-        return response()->json([
-            'status' => 'success',
-            'message' => 'Profile updated successfully',
-            'data' => $user,
-        ]);
     }
 
     /**
@@ -120,31 +124,31 @@ class UserController extends Controller
      * @param  \Illuminate\Http\Request  $request
      * @return \Illuminate\Http\JsonResponse
      */
-    public function changePassword(Request $request)
+    public function changeUserPassword(Request $passwordChangeRequest): JsonResponse
     {
-        $request->validate([
-            'current_password' => 'required|string',
-            'password' => 'required|string|min:8|confirmed',
-        ]);
+        try {
+            $passwordChangeRequest->validate([
+                'current_password' => 'required|string',
+                'password' => 'required|string|min:8|confirmed',
+            ]);
 
-        /** @var \App\Models\User $user */
-        $user = Auth::user();
+            /** @var \App\Models\User $authenticatedUser */
+            $authenticatedUser = Auth::user();
 
-        // Check if current password is correct
-        if (!Hash::check($request->current_password, $user->password)) {
-            return response()->json([
-                'status' => 'error',
-                'message' => 'Current password is incorrect',
-            ], 422);
+            // Check if current password is correct
+            if (!Hash::check($passwordChangeRequest->current_password, $authenticatedUser->password)) {
+                throw new ValidationException(validator([], []), 'Current password is incorrect');
+            }
+
+            $authenticatedUser->password = Hash::make($passwordChangeRequest->password);
+            $authenticatedUser->save();
+
+            return $this->successResponse(null, 'Password changed successfully');
+        } catch (ValidationException $exception) {
+            return $this->errorResponse($exception->getMessage(), 422);
+        } catch (\Exception $exception) {
+            return $this->errorResponse('Failed to change password: ' . $exception->getMessage(), 500);
         }
-
-        $user->password = Hash::make($request->password);
-        $user->save();
-
-        return response()->json([
-            'status' => 'success',
-            'message' => 'Password changed successfully',
-        ]);
     }
 
     /**
@@ -154,28 +158,27 @@ class UserController extends Controller
      * @param  string  $id
      * @return \Illuminate\Http\JsonResponse
      */
-    public function updateAdminStatus(Request $request, string $id)
+    public function updateUserAdminStatus(Request $adminStatusUpdateRequest, string $userId): JsonResponse
     {
-        // Check if authenticated user is an admin
-        if (!Auth::user()->is_admin) {
-            return response()->json([
-                'status' => 'error',
-                'message' => 'Unauthorized. Only admins can perform this action.',
-            ], 403);
+        try {
+            // Check if authenticated user is an admin
+            if (!Auth::user()->is_admin) {
+                throw new AuthorizationException('Unauthorized. Only admins can perform this action.');
+            }
+
+            $adminStatusUpdateRequest->validate([
+                'is_admin' => 'required|boolean',
+            ]);
+
+            $targetUser = User::findOrFail($userId);
+            $targetUser->is_admin = $adminStatusUpdateRequest->is_admin;
+            $targetUser->save();
+
+            return $this->successResponse($targetUser, 'User admin status updated successfully');
+        } catch (AuthorizationException $exception) {
+            return $this->errorResponse($exception->getMessage(), 403);
+        } catch (\Exception $exception) {
+            return $this->errorResponse('Failed to update admin status: ' . $exception->getMessage(), 500);
         }
-
-        $request->validate([
-            'is_admin' => 'required|boolean',
-        ]);
-
-        $user = User::findOrFail($id);
-        $user->is_admin = $request->is_admin;
-        $user->save();
-
-        return response()->json([
-            'status' => 'success',
-            'message' => 'User admin status updated successfully',
-            'data' => $user,
-        ]);
     }
 }

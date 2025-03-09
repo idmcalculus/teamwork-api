@@ -2,11 +2,14 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Exceptions\ApiException;
 use App\Http\Controllers\Controller;
 use App\Models\Post;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Auth\Access\AuthorizationException;
 
 class PostController extends Controller
 {
@@ -15,14 +18,11 @@ class PostController extends Controller
      *
      * @return \Illuminate\Http\JsonResponse
      */
-    public function index()
+    public function getAllPosts(): JsonResponse
     {
-        $posts = Post::with('user')->latest()->paginate(10);
+        $paginatedPostsList = Post::with('user')->latest()->paginate(10);
 
-        return response()->json([
-            'status' => 'success',
-            'data' => $posts,
-        ]);
+        return $this->paginatedResponse($paginatedPostsList);
     }
 
     /**
@@ -31,33 +31,37 @@ class PostController extends Controller
      * @param  \Illuminate\Http\Request  $request
      * @return \Illuminate\Http\JsonResponse
      */
-    public function store(Request $request)
+    public function createNewPost(Request $postCreationRequest): JsonResponse
     {
-        $request->validate([
+        $postCreationRequest->validate([
             'title' => 'required|string|max:255',
             'content' => 'required|string',
             'type' => 'required|in:article,gif',
             'image' => 'nullable|image|mimes:jpeg,png,jpg,gif|max:2048',
         ]);
 
-        $post = new Post();
-        $post->title = $request->title;
-        $post->content = $request->content;
-        $post->type = $request->type;
-        $post->user_id = Auth::id();
+        try {
+            $newPostEntry = new Post();
+            $newPostEntry->title = $postCreationRequest->title;
+            $newPostEntry->content = $postCreationRequest->content;
+            $newPostEntry->type = $postCreationRequest->type;
+            $newPostEntry->user_id = Auth::id();
 
-        if ($request->hasFile('image')) {
-            $imagePath = $request->file('image')->store('posts', 'public');
-            $post->image_url = Storage::url($imagePath);
+            if ($postCreationRequest->hasFile('image')) {
+                $uploadedImagePath = $postCreationRequest->file('image')->store('posts', 'public');
+                $newPostEntry->image_url = Storage::url($uploadedImagePath);
+            }
+
+            $newPostEntry->save();
+
+            return $this->successResponse(
+                $newPostEntry->load('user'),
+                'Post created successfully',
+                201
+            );
+        } catch (\Exception $exception) {
+            return $this->errorResponse('Failed to create post: ' . $exception->getMessage(), 500);
         }
-
-        $post->save();
-
-        return response()->json([
-            'status' => 'success',
-            'message' => 'Post created successfully',
-            'data' => $post->load('user'),
-        ], 201);
     }
 
     /**
@@ -66,14 +70,14 @@ class PostController extends Controller
      * @param  string  $id
      * @return \Illuminate\Http\JsonResponse
      */
-    public function show(string $id)
+    public function getPostById(string $postId): JsonResponse
     {
-        $post = Post::with(['user', 'comments.user'])->findOrFail($id);
-
-        return response()->json([
-            'status' => 'success',
-            'data' => $post,
-        ]);
+        try {
+            $requestedPost = Post::with(['user', 'comments.user'])->findOrFail($postId);
+            return $this->successResponse($requestedPost);
+        } catch (\Exception $exception) {
+            return $this->errorResponse('Post not found', 404);
+        }
     }
 
     /**
@@ -83,55 +87,57 @@ class PostController extends Controller
      * @param  string  $id
      * @return \Illuminate\Http\JsonResponse
      */
-    public function update(Request $request, string $id)
+    public function updateExistingPost(Request $postUpdateRequest, string $postId): JsonResponse
     {
-        $post = Post::findOrFail($id);
+        try {
+            $existingPost = Post::findOrFail($postId);
 
-        // Check if the authenticated user is the owner of the post
-        if ($post->user_id !== Auth::id() && !Auth::user()->is_admin) {
-            return response()->json([
-                'status' => 'error',
-                'message' => 'Unauthorized. You can only update your own posts.',
-            ], 403);
-        }
-
-        $request->validate([
-            'title' => 'sometimes|required|string|max:255',
-            'content' => 'sometimes|required|string',
-            'type' => 'sometimes|required|in:article,gif',
-            'image' => 'nullable|image|mimes:jpeg,png,jpg,gif|max:2048',
-        ]);
-
-        if ($request->has('title')) {
-            $post->title = $request->title;
-        }
-
-        if ($request->has('content')) {
-            $post->content = $request->content;
-        }
-
-        if ($request->has('type')) {
-            $post->type = $request->type;
-        }
-
-        if ($request->hasFile('image')) {
-            // Delete old image if exists
-            if ($post->image_url) {
-                $oldPath = str_replace('/storage/', '', $post->image_url);
-                Storage::disk('public')->delete($oldPath);
+            // Check if the authenticated user is the owner of the post
+            if ($existingPost->user_id !== Auth::id() && !Auth::user()->is_admin) {
+                throw new AuthorizationException('Unauthorized. You can only update your own posts.');
             }
 
-            $imagePath = $request->file('image')->store('posts', 'public');
-            $post->image_url = Storage::url($imagePath);
+            $postUpdateRequest->validate([
+                'title' => 'sometimes|required|string|max:255',
+                'content' => 'sometimes|required|string',
+                'type' => 'sometimes|required|in:article,gif',
+                'image' => 'nullable|image|mimes:jpeg,png,jpg,gif|max:2048',
+            ]);
+
+            if ($postUpdateRequest->has('title')) {
+                $existingPost->title = $postUpdateRequest->title;
+            }
+
+            if ($postUpdateRequest->has('content')) {
+                $existingPost->content = $postUpdateRequest->content;
+            }
+
+            if ($postUpdateRequest->has('type')) {
+                $existingPost->type = $postUpdateRequest->type;
+            }
+
+            if ($postUpdateRequest->hasFile('image')) {
+                // Delete old image if exists
+                if ($existingPost->image_url) {
+                    $previousImagePath = str_replace('/storage/', '', $existingPost->image_url);
+                    Storage::disk('public')->delete($previousImagePath);
+                }
+
+                $newUploadedImagePath = $postUpdateRequest->file('image')->store('posts', 'public');
+                $existingPost->image_url = Storage::url($newUploadedImagePath);
+            }
+
+            $existingPost->save();
+
+            return $this->successResponse(
+                $existingPost->load('user'),
+                'Post updated successfully'
+            );
+        } catch (AuthorizationException $exception) {
+            return $this->errorResponse($exception->getMessage(), 403);
+        } catch (\Exception $exception) {
+            return $this->errorResponse('Failed to update post: ' . $exception->getMessage(), 500);
         }
-
-        $post->save();
-
-        return response()->json([
-            'status' => 'success',
-            'message' => 'Post updated successfully',
-            'data' => $post->load('user'),
-        ]);
     }
 
     /**
@@ -140,30 +146,30 @@ class PostController extends Controller
      * @param  string  $id
      * @return \Illuminate\Http\JsonResponse
      */
-    public function destroy(string $id)
+    public function deletePost(string $postId): JsonResponse
     {
-        $post = Post::findOrFail($id);
+        try {
+            $postToDelete = Post::findOrFail($postId);
 
-        // Check if the authenticated user is the owner of the post or an admin
-        if ($post->user_id !== Auth::id() && !Auth::user()->is_admin) {
-            return response()->json([
-                'status' => 'error',
-                'message' => 'Unauthorized. You can only delete your own posts.',
-            ], 403);
+            // Check if the authenticated user is the owner of the post or an admin
+            if ($postToDelete->user_id !== Auth::id() && !Auth::user()->is_admin) {
+                throw new AuthorizationException('Unauthorized. You can only delete your own posts.');
+            }
+
+            // Delete image if exists
+            if ($postToDelete->image_url) {
+                $postImagePath = str_replace('/storage/', '', $postToDelete->image_url);
+                Storage::disk('public')->delete($postImagePath);
+            }
+
+            $postToDelete->delete();
+
+            return $this->successResponse(null, 'Post deleted successfully');
+        } catch (AuthorizationException $exception) {
+            return $this->errorResponse($exception->getMessage(), 403);
+        } catch (\Exception $exception) {
+            return $this->errorResponse('Failed to delete post: ' . $exception->getMessage(), 500);
         }
-
-        // Delete image if exists
-        if ($post->image_url) {
-            $imagePath = str_replace('/storage/', '', $post->image_url);
-            Storage::disk('public')->delete($imagePath);
-        }
-
-        $post->delete();
-
-        return response()->json([
-            'status' => 'success',
-            'message' => 'Post deleted successfully',
-        ]);
     }
 
     /**
@@ -172,16 +178,17 @@ class PostController extends Controller
      * @param  string  $id
      * @return \Illuminate\Http\JsonResponse
      */
-    public function flagPost(string $id)
+    public function flagInappropriatePost(string $postId): JsonResponse
     {
-        $post = Post::findOrFail($id);
-        $post->flagged = 'true';
-        $post->save();
+        try {
+            $postToFlag = Post::findOrFail($postId);
+            $postToFlag->flagged = 'true';
+            $postToFlag->save();
 
-        return response()->json([
-            'status' => 'success',
-            'message' => 'Post flagged successfully',
-        ]);
+            return $this->successResponse(null, 'Post flagged successfully');
+        } catch (\Exception $exception) {
+            return $this->errorResponse('Failed to flag post: ' . $exception->getMessage(), 500);
+        }
     }
 
     /**
@@ -190,16 +197,17 @@ class PostController extends Controller
      * @param  string  $userId
      * @return \Illuminate\Http\JsonResponse
      */
-    public function getUserPosts(string $userId)
+    public function getPostsByUserId(string $userId): JsonResponse
     {
-        $posts = Post::with('user')
-            ->where('user_id', $userId)
-            ->latest()
-            ->paginate(10);
+        try {
+            $userSpecificPosts = Post::with('user')
+                ->where('user_id', $userId)
+                ->latest()
+                ->paginate(10);
 
-        return response()->json([
-            'status' => 'success',
-            'data' => $posts,
-        ]);
+            return $this->paginatedResponse($userSpecificPosts);
+        } catch (\Exception $exception) {
+            return $this->errorResponse('Failed to retrieve user posts: ' . $exception->getMessage(), 500);
+        }
     }
 }
